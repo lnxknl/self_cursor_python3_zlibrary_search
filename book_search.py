@@ -41,9 +41,7 @@ class BookSearcher:
         self.search_results = []
         self.chunk_size = 200000
         self.n_workers = min(42, mp.cpu_count())
-        self.loaded_data = {}
-        self.last_load_time = {}
-        self.data_lock = Lock()  # Add lock for thread safety
+        self.data_lock = Lock()
         self.db_config = {
             'host': 'localhost',
             'user': 'root',
@@ -51,7 +49,7 @@ class BookSearcher:
             'database': 'book_search'
         }
         self.init_database()
-    
+
     def init_database(self):
         """初始化数据库连接和表"""
         try:
@@ -98,70 +96,36 @@ class BookSearcher:
                 cursor.close()
                 conn.close()
 
-    def get_file_hash(self, file_path: str) -> str:
-        """计算文件的MD5哈希值"""
-        hash_md5 = hashlib.md5()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-
-    def is_file_processed(self, file_path: str, file_hash: str) -> bool:
-        """检查文件是否已经处理过"""
+    @staticmethod
+    def process_file_static(file_path: str, db_config: dict) -> tuple:
+        """静态方法处理单个文件并将数据存入数据库"""
         try:
-            conn = mysql.connector.connect(**self.db_config)
-            cursor = conn.cursor(dictionary=True)
-            
+            # 在子进程中创建新的数据库连接
+            conn = mysql.connector.connect(**db_config)
+            cursor = conn.cursor()
+
+            # 计算文件哈希值
+            hash_md5 = hashlib.md5()
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_md5.update(chunk)
+            file_hash = hash_md5.hexdigest()
+
+            # 检查文件是否已处理
             cursor.execute("""
                 SELECT * FROM processed_files 
                 WHERE file_path = %s AND file_hash = %s
             """, (file_path, file_hash))
             
-            return cursor.fetchone() is not None
-        except Error as e:
-            logging.error(f"数据库查询错误: {e}")
-            return False
-        finally:
-            if conn.is_connected():
-                cursor.close()
-                conn.close()
-
-    def read_excel_safe(self, file_path: str) -> pd.DataFrame:
-        """安全地读取Excel文件"""
-        try:
-            # 尝试使用openpyxl引擎
-            return pd.read_excel(file_path, engine='openpyxl')
-        except Exception as e1:
-            logging.warning(f"使用openpyxl读取失败 {file_path}, 尝试其他引擎: {str(e1)}")
-            try:
-                # 尝试使用xlrd引擎
-                return pd.read_excel(file_path, engine='xlrd')
-            except Exception as e2:
-                logging.warning(f"使用xlrd读取失败 {file_path}, 尝试最后方案: {str(e2)}")
-                try:
-                    # 最后尝试不指定引擎
-                    return pd.read_excel(file_path)
-                except Exception as e3:
-                    logging.error(f"所有读取方法都失败 {file_path}: {str(e3)}")
-                    raise
-    
-    def process_file(self, file_path: str) -> tuple:
-        """处理单个文件并将数据存入数据库"""
-        try:
-            file_hash = self.get_file_hash(file_path)
-            
-            # 检查文件是否已处理
-            if self.is_file_processed(file_path, file_hash):
+            if cursor.fetchone():
                 logging.info(f"文件已处理过，跳过: {file_path}")
                 return None
 
-            df = self.read_excel_safe(file_path)
+            # 读取Excel文件
+            df = pd.read_excel(file_path)
             df['源文件'] = Path(file_path).name
 
             # 将数据存入数据库
-            conn = mysql.connector.connect(**self.db_config)
-            cursor = conn.cursor()
-
             for _, row in df.iterrows():
                 cursor.execute("""
                     INSERT INTO books (
@@ -191,34 +155,38 @@ class BookSearcher:
                 conn.close()
 
     def load_data(self, directory: str = '../xlsx', force_reload: bool = False) -> None:
-        """Load all Excel files from the directory into memory"""
-        with self.data_lock:  # Ensure thread-safe data loading
+        """加载所有Excel文件到数据库中"""
+        try:
             excel_files = []
             for pattern in ['*.xlsx', '*.xls']:
                 excel_files.extend(Path(directory).glob(pattern))
             
             if not excel_files:
-                raise FileNotFoundError(f"在目录2 '{directory}' 中未找到Excel文件")
+                raise FileNotFoundError(f"在目录 '{directory}' 中未找到Excel文件")
             
             print(f"找到 {len(excel_files)} 个Excel文件，开始加载...")
             
-            # Load files in parallel
+            if force_reload:
+                # 如果强制重新加载，清除已处理文件记录
+                with mysql.connector.connect(**self.db_config) as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("TRUNCATE TABLE processed_files")
+                        cursor.execute("TRUNCATE TABLE books")
+                    conn.commit()
+
+            # 使用进程池处理文件
             with ProcessPoolExecutor(max_workers=self.n_workers) as executor:
                 futures = []
-                for f in excel_files:
-                    file_path = str(f)
-                    if not force_reload and file_path in self.loaded_data:
-                        file_mtime = os.path.getmtime(file_path)
-                        if file_mtime <= self.last_load_time.get(file_path, 0):
-                            continue
+                for file_path in excel_files:
                     futures.append(
                         executor.submit(
-                            self.process_file, 
-                            file_path  # Only pass the file path
+                            self.process_file_static,
+                            str(file_path),
+                            self.db_config
                         )
                     )
                 
-                # Show progress
+                # 显示进度
                 total_files = len(futures)
                 completed = 0
                 
@@ -226,17 +194,17 @@ class BookSearcher:
                     try:
                         result = future.result()
                         if result:
-                            file_path, df = result
-                            self.loaded_data[file_path] = df
-                            self.last_load_time[file_path] = os.path.getmtime(file_path)
-                        completed += 1
+                            completed += 1
                         print(f"加载进度: {completed}/{total_files} 文件 ({(completed/total_files*100):.1f}%)", 
                               end='\r')
                     except Exception as e:
                         logging.error(f"处理加载结果时发生错误: {str(e)}")
                         logging.error(traceback.format_exc())
         
-        print("\n数据加载完成！")
+            print("\n数据加载完成！")
+        except Exception as e:
+            logging.error(f"加载数据时发生错误: {str(e)}")
+            raise
 
     @staticmethod
     def process_chunk(args):
@@ -267,7 +235,7 @@ class BookSearcher:
             logging.error(f"处理数据块时发生错误: {str(e)}")
             return []
 
-    def search_books(self, directory: str = '../xlsx', reload: bool = False, **kwargs) -> List[Dict[str, Any]]:
+    def search_books(self, **kwargs) -> List[Dict[str, Any]]:
         """从数据库中搜索符合条件的书籍"""
         try:
             conn = mysql.connector.connect(**self.db_config)
@@ -298,7 +266,6 @@ class BookSearcher:
 
             cursor.execute(query, params)
             results = cursor.fetchall()
-            self.search_results = results
             return results
 
         except Error as e:
@@ -386,7 +353,7 @@ def main():
         
         # 执行搜索
         start_time = datetime.now()
-        results = searcher.search_books(args.dir, reload=args.reload, **search_params)
+        results = searcher.search_books(**search_params)
         end_time = datetime.now()
         
         # 打印结果
