@@ -133,31 +133,47 @@ class BookSearcher:
             # 替换所有的NaN值为None
             df = df.replace({np.nan: None})
 
-            # 批量插入数据以提高性能
-            values = []
-            for _, row in df.iterrows():
-                # 处理每个字段，确保None值和长字符串被正确处理
-                file_id = str(row.get('文件编号'))[:100] if pd.notna(row.get('文件编号')) else None
-                title = str(row.get('书名')) if pd.notna(row.get('书名')) else None
-                author = str(row.get('作者')) if pd.notna(row.get('作者')) else None
-                publisher = str(row.get('出版社')) if pd.notna(row.get('出版社')) else None
-                language = str(row.get('语种'))[:50] if pd.notna(row.get('语种')) else None
-                publish_year = int(row.get('出版年份')) if pd.notna(row.get('出版年份')) else None
-                file_format = str(row.get('文件格式'))[:50] if pd.notna(row.get('文件格式')) else None
-                source_file = str(row.get('源文件'))[:512] if pd.notna(row.get('源文件')) else None
-                
-                values.append((
-                    file_id, title, author, publisher,
-                    language, publish_year, file_format, source_file
-                ))
+            # 分批处理数据
+            batch_size = 1000  # 每批处理1000条记录
+            total_rows = len(df)
+            processed_rows = 0
 
-            # 使用批量插入提高性能
-            cursor.executemany("""
-                INSERT INTO books (
-                    file_id, title, author, publisher, 
-                    language, publish_year, format, source_file
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, values)
+            while processed_rows < total_rows:
+                batch_df = df.iloc[processed_rows:processed_rows + batch_size]
+                values = []
+                
+                for _, row in batch_df.iterrows():
+                    # 处理每个字段，确保None值和长字符串被正确处理
+                    file_id = str(row.get('文件编号'))[:100] if pd.notna(row.get('文件编号')) else None
+                    title = str(row.get('书名')) if pd.notna(row.get('书名')) else None
+                    author = str(row.get('作者')) if pd.notna(row.get('作者')) else None
+                    publisher = str(row.get('出版社')) if pd.notna(row.get('出版社')) else None
+                    language = str(row.get('语种'))[:50] if pd.notna(row.get('语种')) else None
+                    publish_year = int(row.get('出版年份')) if pd.notna(row.get('出版年份')) else None
+                    file_format = str(row.get('文件格式'))[:50] if pd.notna(row.get('文件格式')) else None
+                    source_file = str(row.get('源文件'))[:512] if pd.notna(row.get('源文件')) else None
+                    
+                    values.append((
+                        file_id, title, author, publisher,
+                        language, publish_year, file_format, source_file
+                    ))
+
+                try:
+                    # 批量插入数据
+                    cursor.executemany("""
+                        INSERT INTO books (
+                            file_id, title, author, publisher, 
+                            language, publish_year, format, source_file
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, values)
+                    conn.commit()
+                except Error as e:
+                    logging.error(f"插入批次数据时发生错误: {str(e)}")
+                    conn.rollback()
+                    raise
+
+                processed_rows += batch_size
+                logging.info(f"已处理 {processed_rows}/{total_rows} 行 ({processed_rows/total_rows*100:.1f}%)")
 
             # 记录已处理文件
             cursor.execute("""
