@@ -1,30 +1,55 @@
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, session
 from book_search import BookSearcher
 from translations import TRANSLATIONS
 import os
 import time
+import secrets
 
 import logging
 
 app = Flask(__name__)
 searcher = BookSearcher()
+# Generate a secure random secret key
+app.secret_key = secrets.token_hex(16)
+
+
 
 #@app.route('/')
 #def index():
 #    """Render the main search page"""
 #    lang = request.args.get('lang', 'zh')
 #    return render_template('index.html', translations=TRANSLATIONS[lang])
-
 @app.route('/')
 def index():
     """Render the main search page"""
-    lang = request.args.get('lang', 'zh')
-    # Add a version parameter based on current timestamp
-    version = int(time.time())  # Use current timestamp as version
+    # Get language from query parameter or session or default to Chinese
+    lang = request.args.get('lang') or session.get('lang', 'zh')
+    session['lang'] = lang  # Store language preference in session
     return render_template('index.html', 
                          translations=TRANSLATIONS[lang],
-                         version=version)
+                         current_lang=lang)
 
+@app.route('/change-language/<lang>')
+def change_language(lang):
+    """Change the interface language"""
+    if lang in TRANSLATIONS:
+        session['lang'] = lang
+        return jsonify({
+            'status': 'success',
+            'translations': TRANSLATIONS[lang]
+        })
+    return jsonify({'status': 'error', 'message': 'Invalid language'}), 400
+
+#@app.route('/')
+#def index():
+#    """Render the main search page"""
+#    lang = request.args.get('lang', 'zh')
+#    # Add a version parameter based on current timestamp
+#    version = int(time.time())  # Use current timestamp as version
+#    return render_template('index.html', 
+#                         translations=TRANSLATIONS[lang],
+#                         version=version)
+#
 #    return render_template('index.html')
 
 @app.route('/api/load', methods=['POST'])
