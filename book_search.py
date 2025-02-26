@@ -34,11 +34,11 @@ class BookSearcher:
     
     def __init__(self):
         self.search_results = []
-        self.chunk_size = 100000
-        self.n_workers = max(1, mp.cpu_count() - 1)
-        self.loaded_data = {}  # Store loaded DataFrames
-        self.last_load_time = {}  # Track when each file was last loaded
-        
+        self.chunk_size = 200000
+        self.n_workers = min(42, mp.cpu_count())
+        self.loaded_data = {}
+        self.last_load_time = {}
+    
     def read_excel_safe(self, file_path: str) -> pd.DataFrame:
         """安全地读取Excel文件"""
         try:
@@ -57,10 +57,21 @@ class BookSearcher:
                 except Exception as e3:
                     logging.error(f"所有读取方法都失败 {file_path}: {str(e3)}")
                     raise
+    
+    @staticmethod
+    def process_file(args):
+        """Static method to process a single file"""
+        file_path, reader_method = args
+        try:
+            df = reader_method(file_path)
+            df['源文件'] = Path(file_path).name
+            return str(file_path), df
+        except Exception as e:
+            logging.error(f"加载文件 {file_path} 时发生错误: {str(e)}")
+            return None
 
     def load_data(self, directory: str = '.', force_reload: bool = False) -> None:
         """Load all Excel files from the directory into memory"""
-        # Get all Excel files
         excel_files = []
         for pattern in ['*.xlsx', '*.xls']:
             excel_files.extend(Path(directory).glob(pattern))
@@ -75,81 +86,110 @@ class BookSearcher:
             futures = []
             for f in excel_files:
                 file_path = str(f)
-                # Skip if file is already loaded and force_reload is False
                 if not force_reload and file_path in self.loaded_data:
                     file_mtime = os.path.getmtime(file_path)
                     if file_mtime <= self.last_load_time.get(file_path, 0):
                         continue
-                futures.append(executor.submit(self.read_excel_safe, file_path))
+                futures.append(
+                    executor.submit(
+                        self.process_file, 
+                        (file_path, self.read_excel_safe)
+                    )
+                )
             
             # Show progress
             total_files = len(futures)
             completed = 0
             
-            for future, file_path in zip(futures, excel_files):
+            for future in futures:
                 try:
-                    df = future.result()
-                    df['源文件'] = Path(file_path).name
-                    self.loaded_data[str(file_path)] = df
-                    self.last_load_time[str(file_path)] = os.path.getmtime(str(file_path))
+                    result = future.result()
+                    if result:
+                        file_path, df = result
+                        self.loaded_data[file_path] = df
+                        self.last_load_time[file_path] = os.path.getmtime(file_path)
                     completed += 1
-                    print(f"进度: {completed}/{total_files} 文件 ({(completed/total_files*100):.1f}%)", 
+                    print(f"加载进度: {completed}/{total_files} 文件 ({(completed/total_files*100):.1f}%)", 
                           end='\r')
                 except Exception as e:
-                    logging.error(f"加载文件 {file_path} 时发生错误: {str(e)}")
+                    logging.error(f"处理加载结果时发生错误: {str(e)}")
                     logging.error(traceback.format_exc())
         
         print("\n数据加载完成！")
 
+    @staticmethod
+    def process_chunk(args):
+        """Static method to process a single chunk"""
+        df_chunk, search_params = args
+        try:
+            # Build query
+            query = True
+            for field, value in search_params.items():
+                if value and field in df_chunk.columns:
+                    if isinstance(value, str) and field not in ['上传日期', '日期1']:
+                        try:
+                            query &= df_chunk[field].astype(str).str.contains(value, case=False, na=False)
+                        except Exception as e:
+                            logging.warning(f"字段 {field} 的类型转换失败: {str(e)}")
+                            continue
+                    else:
+                        try:
+                            query &= (df_chunk[field] == value)
+                        except Exception as e:
+                            logging.warning(f"字段 {field} 的比较失败: {str(e)}")
+                            continue
+            
+            # Get matching results
+            matches = df_chunk[query].to_dict('records')
+            return matches
+        except Exception as e:
+            logging.error(f"处理数据块时发生错误: {str(e)}")
+            return []
+
     def search_books(self, directory: str = '.', reload: bool = False, **kwargs) -> List[Dict[str, Any]]:
         """搜索符合条件的书籍"""
-        # Load data if not loaded or reload is True
         if not self.loaded_data or reload:
             self.load_data(directory, force_reload=reload)
             
         all_results = []
         
-        # Process each loaded DataFrame
-        for file_path, df in self.loaded_data.items():
-            try:
-                results = []
-                # Process in chunks
-                for chunk_start in range(0, len(df), self.chunk_size):
-                    chunk = df[chunk_start:chunk_start + self.chunk_size]
+        # Create a pool of workers
+        with ProcessPoolExecutor(max_workers=self.n_workers) as executor:
+            futures = []
+            
+            # Process each loaded DataFrame
+            for file_path, df in self.loaded_data.items():
+                try:
+                    # Split DataFrame into chunks
+                    chunks = [df[i:i + self.chunk_size] for i in range(0, len(df), self.chunk_size)]
                     
-                    # Build query
-                    query = True
-                    for field, value in kwargs.items():
-                        if value and field in chunk.columns:
-                            if isinstance(value, str) and field not in ['上传日期', '日期1']:
-                                try:
-                                    query &= chunk[field].astype(str).str.contains(value, case=False, na=False)
-                                except Exception as e:
-                                    logging.warning(f"字段 {field} 的类型转换失败: {str(e)}")
-                                    continue
-                            else:
-                                try:
-                                    query &= (chunk[field] == value)
-                                except Exception as e:
-                                    logging.warning(f"字段 {field} 的比较失败: {str(e)}")
-                                    continue
+                    # Submit each chunk for processing
+                    for chunk in chunks:
+                        futures.append(
+                            executor.submit(self.process_chunk, (chunk, kwargs))
+                        )
                     
-                    # Get matching results
-                    try:
-                        matches = chunk[query].to_dict('records')
-                        results.extend(matches)
-                    except Exception as e:
-                        logging.error(f"处理查询结果时发生错误: {str(e)}")
-                        continue
-                
-                all_results.extend(results)
-                logging.info(f"文件 {file_path} 处理完成，找到 {len(results)} 条匹配记录")
-                
-            except Exception as e:
-                logging.error(f"处理文件 {file_path} 时发生错误: {str(e)}")
-                logging.error(traceback.format_exc())
+                except Exception as e:
+                    logging.error(f"处理文件 {file_path} 时发生错误: {str(e)}")
+                    logging.error(traceback.format_exc())
+            
+            # Show progress
+            total_futures = len(futures)
+            completed = 0
+            
+            # Collect results as they complete
+            for future in futures:
+                try:
+                    chunk_results = future.result()
+                    all_results.extend(chunk_results)
+                    completed += 1
+                    print(f"搜索进度: {completed}/{total_futures} 块 ({(completed/total_futures*100):.1f}%)", 
+                          end='\r')
+                except Exception as e:
+                    logging.error(f"处理搜索结果时发生错误: {str(e)}")
+            
+            print("\n搜索完成！")
         
-        print("\n搜索完成！")
         self.search_results = all_results
         return all_results
 
@@ -190,7 +230,7 @@ def main():
     parser = argparse.ArgumentParser(description='快速搜索和检查书籍信息')
     parser.add_argument('--dir', '-d', default='.', help='Excel文件所在目录路径（默认为当前目录）')
     parser.add_argument('--verbose', '-v', action='store_true', help='显示详细信息')
-    parser.add_argument('--chunk-size', type=int, default=100000, help='每次处理的数据块大小')
+    parser.add_argument('--chunk-size', type=int, default=200000, help='每次处理的数据块大小')
     parser.add_argument('--reload', action='store_true', help='强制重新加载数据')
     
     # 添加所有可能的搜索字段
