@@ -4,21 +4,28 @@ from translations import TRANSLATIONS
 import os
 import time
 import secrets
-
 import logging
+from threading import Lock
 
 app = Flask(__name__)
-searcher = BookSearcher()
-# Generate a secure random secret key
 app.secret_key = secrets.token_hex(16)
 
+# Global dictionary to store user-specific searchers
+user_searchers = {}
+searcher_lock = Lock()
 
+def get_user_searcher():
+    """Get or create a BookSearcher instance for the current user"""
+    user_id = session.get('user_id')
+    if not user_id:
+        user_id = secrets.token_hex(8)
+        session['user_id'] = user_id
+    
+    with searcher_lock:
+        if user_id not in user_searchers:
+            user_searchers[user_id] = BookSearcher()
+        return user_searchers[user_id]
 
-#@app.route('/')
-#def index():
-#    """Render the main search page"""
-#    lang = request.args.get('lang', 'zh')
-#    return render_template('index.html', translations=TRANSLATIONS[lang])
 @app.route('/')
 def index():
     """Render the main search page"""
@@ -40,18 +47,6 @@ def change_language(lang):
         })
     return jsonify({'status': 'error', 'message': 'Invalid language'}), 400
 
-#@app.route('/')
-#def index():
-#    """Render the main search page"""
-#    lang = request.args.get('lang', 'zh')
-#    # Add a version parameter based on current timestamp
-#    version = int(time.time())  # Use current timestamp as version
-#    return render_template('index.html', 
-#                         translations=TRANSLATIONS[lang],
-#                         version=version)
-#
-#    return render_template('index.html')
-
 @app.route('/api/load', methods=['POST'])
 def load_data():
     """Load or reload the book data"""
@@ -60,6 +55,7 @@ def load_data():
         directory = data.get('directory', '.')
         force_reload = data.get('force_reload', False)
         
+        searcher = get_user_searcher()
         searcher.load_data(directory=directory, force_reload=force_reload)
         return jsonify({
             'status': 'success',
@@ -78,6 +74,8 @@ def search():
     try:
         data = request.get_json()
         logging.info(f"Received search request with data: {data}")
+        
+        searcher = get_user_searcher()
         
         # Map English field names to Chinese field names
         search_params = {
@@ -130,97 +128,6 @@ def search():
             'status': 'error',
             'message': f"Search error: {str(e)}"
         }), 500
-
-#@app.route('/api/search', methods=['POST'])
-#def search():
-#    """Search for books based on provided criteria"""
-#    try:
-#        data = request.get_json()
-#        logging.info(f"Received search request with data: {data}")
-#        
-#        # Map English field names to Chinese field names
-#        search_params = {
-#            '文件编号': data.get('file_id'),
-#            '书名': data.get('title'),
-#            '作者': data.get('author'),
-#            '出版社': data.get('publisher'),
-#            '语种': data.get('language'),
-#            '出版年份': data.get('year'),
-#            '文件格式': data.get('format')
-#        }
-#        
-#        # Remove None and empty string values
-#        search_params = {k: v for k, v in search_params.items() if v is not None and v != ''}
-#        
-#        if not search_params:
-#            return jsonify({
-#                'status': 'error',
-#                'message': 'No search parameters provided'
-#            }), 400
-#        
-#        results = searcher.search_books(**search_params)
-#        
-#        # Transform results to use English field names
-#        transformed_results = []
-#        for result in results:
-#            transformed_results.append({
-#                'file_id': result.get('文件编号', ''),
-#                'title': result.get('书名', ''),
-#                'author': result.get('作者', ''),
-#                'publisher': result.get('出版社', ''),
-#                'language': result.get('语种', ''),
-#                'year': result.get('出版年份', ''),
-#                'format': result.get('文件格式', '')
-#            })
-#        
-#        return jsonify({
-#            'status': 'success',
-#            'count': len(results),
-#            'results': transformed_results
-#        })
-#    except Exception as e:
-#        logging.exception("Error during search")
-#        return jsonify({
-#            'status': 'error',
-#            'message': f"Search error: {str(e)}"
-#        }), 500
-#@app.route('/api/search', methods=['POST'])
-#def search():
-#    """Search for books based on provided criteria"""
-#    try:
-#        data = request.get_json()
-#        search_params = {
-#            '文件编号': data.get('file_id'),
-#            '书名': data.get('title'),
-#            '作者': data.get('author'),
-#            '出版社': data.get('publisher'),
-#            '语种': data.get('language'),
-#            '出版年份': data.get('year'),
-#            '文件格式': data.get('format')
-#        }
-#        
-#        # Remove None and empty string values
-#        search_params = {k: v for k, v in search_params.items() if v is not None and v != ''}
-#        
-#        if not search_params:
-#            return jsonify({
-#                'status': 'error',
-#                'message': 'No search parameters provided'
-#            }), 400
-#        
-#        results = searcher.search_books(**search_params)
-#        
-#        return jsonify({
-#            'status': 'success',
-#            'count': len(results),
-#            'results': results
-#        })
-#    except Exception as e:
-#        logging.error(f"Error during search: {str(e)}")
-#        return jsonify({
-#            'status': 'error',
-#            'message': str(e)
-#        }), 500
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)

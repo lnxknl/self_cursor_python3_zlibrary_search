@@ -15,6 +15,8 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import os
 import warnings
 import traceback
+from threading import Lock
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # 设置警告过滤
 warnings.filterwarnings('ignore')
@@ -38,6 +40,7 @@ class BookSearcher:
         self.n_workers = min(42, mp.cpu_count())
         self.loaded_data = {}
         self.last_load_time = {}
+        self.data_lock = Lock()  # Add lock for thread safety
     
     def read_excel_safe(self, file_path: str) -> pd.DataFrame:
         """安全地读取Excel文件"""
@@ -72,48 +75,49 @@ class BookSearcher:
 
     def load_data(self, directory: str = '../xlsx', force_reload: bool = False) -> None:
         """Load all Excel files from the directory into memory"""
-        excel_files = []
-        for pattern in ['*.xlsx', '*.xls']:
-            excel_files.extend(Path(directory).glob(pattern))
-        
-        if not excel_files:
-            raise FileNotFoundError(f"在目录 '{directory}' 中未找到Excel文件")
+        with self.data_lock:  # Ensure thread-safe data loading
+            excel_files = []
+            for pattern in ['*.xlsx', '*.xls']:
+                excel_files.extend(Path(directory).glob(pattern))
             
-        print(f"找到 {len(excel_files)} 个Excel文件，开始加载...")
-        
-        # Load files in parallel
-        with ProcessPoolExecutor(max_workers=self.n_workers) as executor:
-            futures = []
-            for f in excel_files:
-                file_path = str(f)
-                if not force_reload and file_path in self.loaded_data:
-                    file_mtime = os.path.getmtime(file_path)
-                    if file_mtime <= self.last_load_time.get(file_path, 0):
-                        continue
-                futures.append(
-                    executor.submit(
-                        self.process_file, 
-                        (file_path, self.read_excel_safe)
+            if not excel_files:
+                raise FileNotFoundError(f"在目录 '{directory}' 中未找到Excel文件")
+            
+            print(f"找到 {len(excel_files)} 个Excel文件，开始加载...")
+            
+            # Load files in parallel
+            with ProcessPoolExecutor(max_workers=self.n_workers) as executor:
+                futures = []
+                for f in excel_files:
+                    file_path = str(f)
+                    if not force_reload and file_path in self.loaded_data:
+                        file_mtime = os.path.getmtime(file_path)
+                        if file_mtime <= self.last_load_time.get(file_path, 0):
+                            continue
+                    futures.append(
+                        executor.submit(
+                            self.process_file, 
+                            (file_path, self.read_excel_safe)
+                        )
                     )
-                )
-            
-            # Show progress
-            total_files = len(futures)
-            completed = 0
-            
-            for future in futures:
-                try:
-                    result = future.result()
-                    if result:
-                        file_path, df = result
-                        self.loaded_data[file_path] = df
-                        self.last_load_time[file_path] = os.path.getmtime(file_path)
-                    completed += 1
-                    print(f"加载进度: {completed}/{total_files} 文件 ({(completed/total_files*100):.1f}%)", 
-                          end='\r')
-                except Exception as e:
-                    logging.error(f"处理加载结果时发生错误: {str(e)}")
-                    logging.error(traceback.format_exc())
+                
+                # Show progress
+                total_files = len(futures)
+                completed = 0
+                
+                for future in futures:
+                    try:
+                        result = future.result()
+                        if result:
+                            file_path, df = result
+                            self.loaded_data[file_path] = df
+                            self.last_load_time[file_path] = os.path.getmtime(file_path)
+                        completed += 1
+                        print(f"加载进度: {completed}/{total_files} 文件 ({(completed/total_files*100):.1f}%)", 
+                              end='\r')
+                    except Exception as e:
+                        logging.error(f"处理加载结果时发生错误: {str(e)}")
+                        logging.error(traceback.format_exc())
         
         print("\n数据加载完成！")
 
@@ -146,7 +150,7 @@ class BookSearcher:
             logging.error(f"处理数据块时发生错误: {str(e)}")
             return []
 
-    def search_books(self, directory: str = '.', reload: bool = False, **kwargs) -> List[Dict[str, Any]]:
+    def search_books(self, directory: str = '../xlsx', reload: bool = False, **kwargs) -> List[Dict[str, Any]]:
         """搜索符合条件的书籍"""
         if not self.loaded_data or reload:
             self.load_data(directory, force_reload=reload)

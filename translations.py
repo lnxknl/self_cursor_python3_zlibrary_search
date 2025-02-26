@@ -1,0 +1,40 @@
+TRANSLATIONS = {
+    'zh': {
+        'title': '图书搜索系统',
+        'search': '搜索',
+        'load_data': '加载数据',
+        'clear': '清空',
+        'file_id': '文件编号',
+        'book_title': '书名',
+        'author': '作者',
+        'publisher': '出版社',
+        'language': '语种',
+        'year': '出版年份',
+        'format': '文件格式',
+        'source_file': '源文件',
+        'results_count': '找到 {} 条结果',
+        'loading': '加载中...',
+        'no_results': '未找到匹配的书籍',
+        'data_loaded': '数据加载完成！',
+        'search_completed': '搜索完成！'
+    },
+    'en': {
+        'title': 'Book Search System',
+        'search': 'Search',
+        'load_data': 'Load Data',
+        'clear': 'Clear',
+        'file_id': 'File ID',
+        'book_title': 'Title',
+        'author': 'Author',
+        'publisher': 'Publisher',
+        'language': 'Language',
+        'year': 'Year',
+        'format': 'Format',
+        'source_file': 'Source File',
+        'results_count': 'Found {} results',
+        'loading': 'Loading...',
+        'no_results': 'No matching books found',
+        'data_loaded': 'Data loaded successfully!',
+        'search_completed': 'Search completed!'
+    }
+}
