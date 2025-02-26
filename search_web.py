@@ -1,18 +1,29 @@
 from flask import Flask, render_template, jsonify, request
 from book_search import BookSearcher
 from translations import TRANSLATIONS
+import os
+import time
 
 import logging
 
 app = Flask(__name__)
 searcher = BookSearcher()
 
+#@app.route('/')
+#def index():
+#    """Render the main search page"""
+#    lang = request.args.get('lang', 'zh')
+#    return render_template('index.html', translations=TRANSLATIONS[lang])
+
 @app.route('/')
 def index():
     """Render the main search page"""
     lang = request.args.get('lang', 'zh')
-    return render_template('index.html', translations=TRANSLATIONS[lang])
-
+    # Add a version parameter based on current timestamp
+    version = int(time.time())  # Use current timestamp as version
+    return render_template('index.html', 
+                         translations=TRANSLATIONS[lang],
+                         version=version)
 
 #    return render_template('index.html')
 
