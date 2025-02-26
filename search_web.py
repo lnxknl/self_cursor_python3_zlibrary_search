@@ -6,6 +6,7 @@ import time
 import secrets
 import logging
 from threading import Lock
+from pathlib import Path
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -52,14 +53,40 @@ def load_data():
     """Load or reload the book data"""
     try:
         data = request.get_json()
-        directory = data.get('directory', '.')
+        # 使用相对于应用程序的路径
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        directory = data.get('directory', '../xlsx')
+        directory = os.path.join(base_dir, directory)
         force_reload = data.get('force_reload', False)
         
+        # 确保目录存在
+        directory = os.path.abspath(directory)
+        logging.info(f"Searching for Excel files in directory: {directory}")
+        
+        if not os.path.exists(directory):
+            return jsonify({
+                'status': 'error',
+                'message': f'目录不存在: {directory}'
+            }), 404
+
+        # 检查是否有Excel文件
+        excel_files = []
+        for pattern in ['*.xlsx', '*.xls']:
+            excel_files.extend(Path(directory).glob(pattern))
+        
+        if not excel_files:
+            return jsonify({
+                'status': 'error',
+                'message': f'在目录 {directory} 中未找到Excel文件'
+            }), 404
+
+        logging.info(f"Found {len(excel_files)} Excel files")
         searcher = get_user_searcher()
         searcher.load_data(directory=directory, force_reload=force_reload)
+        
         return jsonify({
             'status': 'success',
-            'message': 'Data loaded successfully'
+            'message': f'成功处理 {len(excel_files)} 个Excel文件'
         })
     except Exception as e:
         logging.error(f"Error loading data: {str(e)}")
@@ -77,56 +104,32 @@ def search():
         
         searcher = get_user_searcher()
         
-        # Map English field names to Chinese field names
+        # 构建搜索参数
         search_params = {
-            '文件编号': data.get('file_id'),
-            '书名': data.get('title'),
-            '作者': data.get('author'),
-            '出版社': data.get('publisher'),
-            '语种': data.get('language'),
-            '出版年份': data.get('year'),
-            '文件格式': data.get('format')
+            'title': data.get('title'),
+            'author': data.get('author'),
+            'publisher': data.get('publisher'),
+            'year': data.get('year'),
+            'language': data.get('language'),
+            'format': data.get('format')
         }
         
-        # Remove None and empty string values
-        search_params = {k: v for k, v in search_params.items() if v is not None and v != ''}
+        # 移除None值
+        search_params = {k: v for k, v in search_params.items() if v is not None}
         
-        if not search_params:
-            return jsonify({
-                'status': 'error',
-                'message': 'No search parameters provided'
-            }), 400
-        
+        # 执行搜索
         results = searcher.search_books(**search_params)
-        
-        # Transform results to use English field names and handle non-JSON-serializable values
-        transformed_results = []
-        for result in results:
-            # Convert any numeric values to strings if they're NaN
-            transformed = {
-                'file_id': str(result.get('文件编号', '')) if result.get('文件编号') is not None else '',
-                'title': str(result.get('书名', '')) if result.get('书名') is not None else '',
-                'author': str(result.get('作者', '')) if result.get('作者') is not None else '',
-                'publisher': str(result.get('出版社', '')) if result.get('出版社') is not None else '',
-                'language': str(result.get('语种', '')) if result.get('语种') is not None else '',
-                'year': str(result.get('出版年份', '')) if result.get('出版年份') is not None else '',
-                'format': str(result.get('文件格式', '')) if result.get('文件格式') is not None else ''
-            }
-            
-            # Clean up 'nan' strings
-            transformed = {k: '' if v.lower() == 'nan' else v for k, v in transformed.items()}
-            transformed_results.append(transformed)
         
         return jsonify({
             'status': 'success',
-            'count': len(results),
-            'results': transformed_results
+            'data': results,
+            'count': len(results)
         })
     except Exception as e:
-        logging.exception("Error during search")
+        logging.error(f"Search error: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': f"Search error: {str(e)}"
+            'message': str(e)
         }), 500
 
 if __name__ == '__main__':

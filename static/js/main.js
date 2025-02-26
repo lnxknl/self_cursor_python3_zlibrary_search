@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     console.log('JavaScript initializing...'); // Debug log
     const searchForm = document.getElementById('searchForm');
-    const loadDataBtn = document.getElementById('loadData');
+    const loadDataBtn = document.getElementById('loadDataBtn');
     const loading = document.getElementById('loading');
     const resultsStats = document.getElementById('resultsStats');
     const resultsBody = document.getElementById('resultsBody');
@@ -22,13 +22,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 'results_count': '找到 {} 条结果',
                 'search_completed': '搜索完成！',
                 'data_loaded': '数据加载完成！',
-                'error': '错误'
+                'error': '错误',
+                'no_results': '没有找到结果'
             },
             'en': {
                 'results_count': 'Found {} results',
                 'search_completed': 'Search completed!',
                 'data_loaded': 'Data loaded successfully!',
-                'error': 'Error'
+                'error': 'Error',
+                'no_results': 'No results found'
             }
         };
     }
@@ -85,22 +87,54 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Remove any existing event listeners before adding new ones
+    // 页面加载时自动加载数据
+    window.addEventListener('load', async function() {
+        await loadData();
+    });
+
+    // 加载数据按钮点击事件
+    if (loadDataBtn) {
+        loadDataBtn.addEventListener('click', loadData);
+    }
+
+    async function loadData() {
+        showLoading();
+        try {
+            const response = await fetch('/api/load', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    directory: '../xlsx',
+                    force_reload: true
+                })
+            });
+
+            const data = await response.json();
+            if (data.status === 'success') {
+                showToast(data.message);
+            } else {
+                showToast(data.message, true);
+            }
+        } catch (error) {
+            console.error('Load error:', error);
+            showToast(`Error: ${error.message}`, true);
+        } finally {
+            hideLoading();
+        }
+    }
+
+    // 搜索表单提交事件
     if (searchForm) {
-        const newSearchForm = searchForm.cloneNode(true);
-        searchForm.parentNode.replaceChild(newSearchForm, searchForm);
-        
-        newSearchForm.addEventListener('submit', async function(e) {
+        searchForm.addEventListener('submit', async function(e) {
             e.preventDefault();
-            console.log('Form submitted - single event'); // Debug log
             showLoading();
 
-            const formData = new FormData(newSearchForm);
+            const formData = new FormData(searchForm);
             const searchParams = {};
             for (let [key, value] of formData.entries()) {
-                if (value) {
-                    searchParams[key] = value;
-                }
+                if (value) searchParams[key] = value;
             }
 
             try {
@@ -113,52 +147,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
 
                 const data = await response.json();
-                
-                if (data.status === 'error') {
-                    showToast(data.message, true);
+                if (data.status === 'success') {
+                    displayResults(data.data);
+                    showToast(`找到 ${data.count} 条结果`);
                 } else {
-                    displayResults(data);
-                    showToast(window.translations[window.currentLang]['search_completed']);
+                    showToast(data.message, true);
                 }
             } catch (error) {
                 console.error('Search error:', error);
-                showToast(`${window.translations[window.currentLang]['error']}: ${error.message}`, true);
-            } finally {
-                hideLoading();
-            }
-        });
-    }
-
-    // Similarly for the load data button
-    if (loadDataBtn) {
-        const newLoadDataBtn = loadDataBtn.cloneNode(true);
-        loadDataBtn.parentNode.replaceChild(newLoadDataBtn, loadDataBtn);
-        
-        newLoadDataBtn.addEventListener('click', async function() {
-            console.log('Load data clicked - single event'); // Debug log
-            showLoading();
-            try {
-                const response = await fetch('/api/load', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        directory: '.',
-                        force_reload: true
-                    })
-                });
-
-                const data = await response.json();
-                showToast(
-                    data.status === 'error' 
-                        ? data.message 
-                        : window.translations[window.currentLang]['data_loaded'],
-                    data.status === 'error'
-                );
-            } catch (error) {
-                console.error('Load error:', error);
-                showToast(`${window.translations[window.currentLang]['error']}: ${error.message}`, true);
+                showToast(`Error: ${error.message}`, true);
             } finally {
                 hideLoading();
             }

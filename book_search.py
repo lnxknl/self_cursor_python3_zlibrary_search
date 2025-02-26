@@ -198,7 +198,7 @@ class BookSearcher:
                 excel_files.extend(Path(directory).glob(pattern))
             
             if not excel_files:
-                raise FileNotFoundError(f"在目录 '{directory}' 中未找到Excel文件")
+                raise FileNotFoundError(f"在目录2 '{directory}' 中未找到Excel文件")
             
             print(f"找到 {len(excel_files)} 个Excel文件，开始加载...")
             
