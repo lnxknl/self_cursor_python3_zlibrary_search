@@ -124,18 +124,30 @@ class BookSearcher:
             # 读取Excel文件
             df = pd.read_excel(file_path)
             df['源文件'] = Path(file_path).name
+            
+            # 替换所有的NaN值为None
+            df = df.replace({np.nan: None})
 
             # 将数据存入数据库
             for _, row in df.iterrows():
+                # 处理每个字段，确保None值被正确处理
+                file_id = str(row.get('文件编号')) if pd.notna(row.get('文件编号')) else None
+                title = str(row.get('书名')) if pd.notna(row.get('书名')) else None
+                author = str(row.get('作者')) if pd.notna(row.get('作者')) else None
+                publisher = str(row.get('出版社')) if pd.notna(row.get('出版社')) else None
+                language = str(row.get('语种')) if pd.notna(row.get('语种')) else None
+                publish_year = int(row.get('出版年份')) if pd.notna(row.get('出版年份')) else None
+                file_format = str(row.get('文件格式')) if pd.notna(row.get('文件格式')) else None
+                source_file = str(row.get('源文件')) if pd.notna(row.get('源文件')) else None
+
                 cursor.execute("""
                     INSERT INTO books (
                         file_id, title, author, publisher, 
                         language, publish_year, format, source_file
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    row.get('文件编号'), row.get('书名'), row.get('作者'),
-                    row.get('出版社'), row.get('语种'), row.get('出版年份'),
-                    row.get('文件格式'), row.get('源文件')
+                    file_id, title, author, publisher,
+                    language, publish_year, file_format, source_file
                 ))
 
             # 记录已处理文件
@@ -148,6 +160,8 @@ class BookSearcher:
             return str(file_path), True
         except Exception as e:
             logging.error(f"处理文件时发生错误 {file_path}: {str(e)}")
+            if 'conn' in locals() and conn.is_connected():
+                conn.rollback()  # 发生错误时回滚事务
             return None
         finally:
             if 'conn' in locals() and conn.is_connected():
