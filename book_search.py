@@ -70,7 +70,7 @@ class BookSearcher:
             logging.error(f"加载文件 {file_path} 时发生错误: {str(e)}")
             return None
 
-    def load_data(self, directory: str = '.', force_reload: bool = False) -> None:
+    def load_data(self, directory: str = '../xlsx', force_reload: bool = False) -> None:
         """Load all Excel files from the directory into memory"""
         excel_files = []
         for pattern in ['*.xlsx', '*.xls']:
