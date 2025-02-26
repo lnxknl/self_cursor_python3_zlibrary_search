@@ -62,11 +62,12 @@ class BookSearcher:
                     raise
     
     @staticmethod
-    def process_file(args):
+    def process_file(file_path: str) -> tuple:
         """Static method to process a single file"""
-        file_path, reader_method = args
         try:
-            df = reader_method(file_path)
+            # Create a new instance of BookSearcher just for reading the file
+            searcher = BookSearcher()
+            df = searcher.read_excel_safe(file_path)
             df['源文件'] = Path(file_path).name
             return str(file_path), df
         except Exception as e:
@@ -97,7 +98,7 @@ class BookSearcher:
                     futures.append(
                         executor.submit(
                             self.process_file, 
-                            (file_path, self.read_excel_safe)
+                            file_path  # Only pass the file path
                         )
                     )
                 
