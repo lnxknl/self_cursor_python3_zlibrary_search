@@ -1,5 +1,12 @@
+// Add a flag to prevent duplicate event listeners
+let isInitialized = false;
+
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('JavaScript loaded successfully');
+    // Prevent multiple initializations
+    if (isInitialized) return;
+    isInitialized = true;
+
+    console.log('JavaScript initializing...'); // Debug log
     const searchForm = document.getElementById('searchForm');
     const loadDataBtn = document.getElementById('loadData');
     const loading = document.getElementById('loading');
@@ -78,21 +85,23 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Remove any existing event listeners before adding new ones
     if (searchForm) {
-        searchForm.addEventListener('submit', async function(e) {
+        const newSearchForm = searchForm.cloneNode(true);
+        searchForm.parentNode.replaceChild(newSearchForm, searchForm);
+        
+        newSearchForm.addEventListener('submit', async function(e) {
             e.preventDefault();
-            console.log('Form submitted');
+            console.log('Form submitted - single event'); // Debug log
             showLoading();
 
-            const formData = new FormData(searchForm);
+            const formData = new FormData(newSearchForm);
             const searchParams = {};
             for (let [key, value] of formData.entries()) {
                 if (value) {
                     searchParams[key] = value;
                 }
             }
-
-            console.log('Search params:', searchParams);
 
             try {
                 const response = await fetch('/api/search', {
@@ -104,7 +113,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
 
                 const data = await response.json();
-                console.log('Search response:', data);
                 
                 if (data.status === 'error') {
                     showToast(data.message, true);
@@ -119,13 +127,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 hideLoading();
             }
         });
-    } else {
-        console.error('Search form not found!');
     }
 
+    // Similarly for the load data button
     if (loadDataBtn) {
-        loadDataBtn.addEventListener('click', async function() {
-            console.log('Load data clicked');
+        const newLoadDataBtn = loadDataBtn.cloneNode(true);
+        loadDataBtn.parentNode.replaceChild(newLoadDataBtn, loadDataBtn);
+        
+        newLoadDataBtn.addEventListener('click', async function() {
+            console.log('Load data clicked - single event'); // Debug log
             showLoading();
             try {
                 const response = await fetch('/api/load', {
@@ -153,8 +163,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 hideLoading();
             }
         });
-    } else {
-        console.error('Load data button not found!');
     }
 
     const initialLang = document.documentElement.lang || 'zh';
