@@ -1,5 +1,7 @@
 from flask import Flask, render_template, jsonify, request
 from book_search import BookSearcher
+from translations import TRANSLATIONS
+
 import logging
 
 app = Flask(__name__)
@@ -8,7 +10,11 @@ searcher = BookSearcher()
 @app.route('/')
 def index():
     """Render the main search page"""
-    return render_template('index.html')
+    lang = request.args.get('lang', 'zh')
+    return render_template('index.html', translations=TRANSLATIONS[lang])
+
+
+#    return render_template('index.html')
 
 @app.route('/api/load', methods=['POST'])
 def load_data():
