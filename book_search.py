@@ -56,6 +56,10 @@ class BookSearcher:
             conn = mysql.connector.connect(**self.db_config)
             cursor = conn.cursor()
 
+            # 删除旧表（如果存在）
+            cursor.execute("DROP TABLE IF EXISTS books")
+            cursor.execute("DROP TABLE IF EXISTS processed_files")
+            
             # 创建已处理文件记录表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS processed_files (
@@ -65,20 +69,17 @@ class BookSearcher:
                     last_modified TIMESTAMP,
                     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE KEY unique_file (file_path)
-                )
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             """)
-
-            # 删除旧表（如果存在）并创建新的书籍信息表
-            cursor.execute("DROP TABLE IF EXISTS books")
             
-            # 创建书籍信息表，使用TEXT类型存储可能较长的内容
+            # 创建书籍信息表，使用MEDIUMTEXT类型存储可能较长的内容
             cursor.execute("""
                 CREATE TABLE books (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     file_id VARCHAR(100),
-                    title TEXT,
-                    author TEXT,
-                    publisher TEXT,
+                    title MEDIUMTEXT,
+                    author MEDIUMTEXT,
+                    publisher MEDIUMTEXT,
                     language VARCHAR(50),
                     publish_year INT,
                     format VARCHAR(50),
@@ -189,12 +190,8 @@ class BookSearcher:
             print(f"找到 {len(excel_files)} 个Excel文件，开始加载...")
             
             if force_reload:
-                # 如果强制重新加载，清除已处理文件记录
-                with mysql.connector.connect(**self.db_config) as conn:
-                    with conn.cursor() as cursor:
-                        cursor.execute("TRUNCATE TABLE processed_files")
-                        cursor.execute("TRUNCATE TABLE books")
-                    conn.commit()
+                # 如果强制重新加载，重新初始化数据库表
+                self.init_database()
 
             # 使用进程池处理文件
             with ProcessPoolExecutor(max_workers=self.n_workers) as executor:
