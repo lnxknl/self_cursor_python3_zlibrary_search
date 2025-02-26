@@ -60,7 +60,7 @@ class BookSearcher:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS processed_files (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    file_path VARCHAR(255) NOT NULL,
+                    file_path VARCHAR(512) NOT NULL,
                     file_hash VARCHAR(64) NOT NULL,
                     last_modified TIMESTAMP,
                     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -68,26 +68,30 @@ class BookSearcher:
                 )
             """)
 
-            # 创建书籍信息表
+            # 删除旧表（如果存在）并创建新的书籍信息表
+            cursor.execute("DROP TABLE IF EXISTS books")
+            
+            # 创建书籍信息表，使用TEXT类型存储可能较长的内容
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS books (
+                CREATE TABLE books (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     file_id VARCHAR(100),
-                    title VARCHAR(255),
-                    author VARCHAR(255),
-                    publisher VARCHAR(255),
+                    title TEXT,
+                    author TEXT,
+                    publisher TEXT,
                     language VARCHAR(50),
                     publish_year INT,
                     format VARCHAR(50),
-                    source_file VARCHAR(255),
+                    source_file VARCHAR(512),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_title (title),
-                    INDEX idx_author (author),
-                    INDEX idx_publisher (publisher)
-                )
+                    FULLTEXT INDEX idx_title (title),
+                    FULLTEXT INDEX idx_author (author),
+                    FULLTEXT INDEX idx_publisher (publisher)
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             """)
 
             conn.commit()
+            logging.info("数据库表初始化完成")
         except Error as e:
             logging.error(f"数据库初始化错误: {e}")
             raise
@@ -128,27 +132,31 @@ class BookSearcher:
             # 替换所有的NaN值为None
             df = df.replace({np.nan: None})
 
-            # 将数据存入数据库
+            # 批量插入数据以提高性能
+            values = []
             for _, row in df.iterrows():
-                # 处理每个字段，确保None值被正确处理
-                file_id = str(row.get('文件编号')) if pd.notna(row.get('文件编号')) else None
+                # 处理每个字段，确保None值和长字符串被正确处理
+                file_id = str(row.get('文件编号'))[:100] if pd.notna(row.get('文件编号')) else None
                 title = str(row.get('书名')) if pd.notna(row.get('书名')) else None
                 author = str(row.get('作者')) if pd.notna(row.get('作者')) else None
                 publisher = str(row.get('出版社')) if pd.notna(row.get('出版社')) else None
-                language = str(row.get('语种')) if pd.notna(row.get('语种')) else None
+                language = str(row.get('语种'))[:50] if pd.notna(row.get('语种')) else None
                 publish_year = int(row.get('出版年份')) if pd.notna(row.get('出版年份')) else None
-                file_format = str(row.get('文件格式')) if pd.notna(row.get('文件格式')) else None
-                source_file = str(row.get('源文件')) if pd.notna(row.get('源文件')) else None
-
-                cursor.execute("""
-                    INSERT INTO books (
-                        file_id, title, author, publisher, 
-                        language, publish_year, format, source_file
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
+                file_format = str(row.get('文件格式'))[:50] if pd.notna(row.get('文件格式')) else None
+                source_file = str(row.get('源文件'))[:512] if pd.notna(row.get('源文件')) else None
+                
+                values.append((
                     file_id, title, author, publisher,
                     language, publish_year, file_format, source_file
                 ))
+
+            # 使用批量插入提高性能
+            cursor.executemany("""
+                INSERT INTO books (
+                    file_id, title, author, publisher, 
+                    language, publish_year, format, source_file
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, values)
 
             # 记录已处理文件
             cursor.execute("""
@@ -161,7 +169,7 @@ class BookSearcher:
         except Exception as e:
             logging.error(f"处理文件时发生错误 {file_path}: {str(e)}")
             if 'conn' in locals() and conn.is_connected():
-                conn.rollback()  # 发生错误时回滚事务
+                conn.rollback()
             return None
         finally:
             if 'conn' in locals() and conn.is_connected():
@@ -261,13 +269,13 @@ class BookSearcher:
             for field, value in kwargs.items():
                 if value:
                     if field == 'title':
-                        conditions.append("title LIKE %s")
+                        conditions.append("MATCH(title) AGAINST(%s)")
                         params.append(f"%{value}%")
                     elif field == 'author':
-                        conditions.append("author LIKE %s")
+                        conditions.append("MATCH(author) AGAINST(%s)")
                         params.append(f"%{value}%")
                     elif field == 'publisher':
-                        conditions.append("publisher LIKE %s")
+                        conditions.append("MATCH(publisher) AGAINST(%s)")
                         params.append(f"%{value}%")
                     elif field == 'year':
                         conditions.append("publish_year = %s")
