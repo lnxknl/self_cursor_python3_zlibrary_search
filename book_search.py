@@ -17,6 +17,9 @@ import warnings
 import traceback
 from threading import Lock
 from apscheduler.schedulers.background import BackgroundScheduler
+import mysql.connector
+from mysql.connector import Error
+import hashlib
 
 # 设置警告过滤
 warnings.filterwarnings('ignore')
@@ -41,7 +44,88 @@ class BookSearcher:
         self.loaded_data = {}
         self.last_load_time = {}
         self.data_lock = Lock()  # Add lock for thread safety
+        self.db_config = {
+            'host': 'localhost',
+            'user': 'root',
+            'password': '123',
+            'database': 'book_search'
+        }
+        self.init_database()
     
+    def init_database(self):
+        """初始化数据库连接和表"""
+        try:
+            conn = mysql.connector.connect(**self.db_config)
+            cursor = conn.cursor()
+
+            # 创建已处理文件记录表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS processed_files (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    file_path VARCHAR(255) NOT NULL,
+                    file_hash VARCHAR(64) NOT NULL,
+                    last_modified TIMESTAMP,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY unique_file (file_path)
+                )
+            """)
+
+            # 创建书籍信息表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS books (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    file_id VARCHAR(100),
+                    title VARCHAR(255),
+                    author VARCHAR(255),
+                    publisher VARCHAR(255),
+                    language VARCHAR(50),
+                    publish_year INT,
+                    format VARCHAR(50),
+                    source_file VARCHAR(255),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_title (title),
+                    INDEX idx_author (author),
+                    INDEX idx_publisher (publisher)
+                )
+            """)
+
+            conn.commit()
+        except Error as e:
+            logging.error(f"数据库初始化错误: {e}")
+            raise
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
+
+    def get_file_hash(self, file_path: str) -> str:
+        """计算文件的MD5哈希值"""
+        hash_md5 = hashlib.md5()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+
+    def is_file_processed(self, file_path: str, file_hash: str) -> bool:
+        """检查文件是否已经处理过"""
+        try:
+            conn = mysql.connector.connect(**self.db_config)
+            cursor = conn.cursor(dictionary=True)
+            
+            cursor.execute("""
+                SELECT * FROM processed_files 
+                WHERE file_path = %s AND file_hash = %s
+            """, (file_path, file_hash))
+            
+            return cursor.fetchone() is not None
+        except Error as e:
+            logging.error(f"数据库查询错误: {e}")
+            return False
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
+
     def read_excel_safe(self, file_path: str) -> pd.DataFrame:
         """安全地读取Excel文件"""
         try:
@@ -61,18 +145,50 @@ class BookSearcher:
                     logging.error(f"所有读取方法都失败 {file_path}: {str(e3)}")
                     raise
     
-    @staticmethod
-    def process_file(file_path: str) -> tuple:
-        """Static method to process a single file"""
+    def process_file(self, file_path: str) -> tuple:
+        """处理单个文件并将数据存入数据库"""
         try:
-            # Create a new instance of BookSearcher just for reading the file
-            searcher = BookSearcher()
-            df = searcher.read_excel_safe(file_path)
+            file_hash = self.get_file_hash(file_path)
+            
+            # 检查文件是否已处理
+            if self.is_file_processed(file_path, file_hash):
+                logging.info(f"文件已处理过，跳过: {file_path}")
+                return None
+
+            df = self.read_excel_safe(file_path)
             df['源文件'] = Path(file_path).name
-            return str(file_path), df
+
+            # 将数据存入数据库
+            conn = mysql.connector.connect(**self.db_config)
+            cursor = conn.cursor()
+
+            for _, row in df.iterrows():
+                cursor.execute("""
+                    INSERT INTO books (
+                        file_id, title, author, publisher, 
+                        language, publish_year, format, source_file
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    row.get('文件编号'), row.get('书名'), row.get('作者'),
+                    row.get('出版社'), row.get('语种'), row.get('出版年份'),
+                    row.get('文件格式'), row.get('源文件')
+                ))
+
+            # 记录已处理文件
+            cursor.execute("""
+                INSERT INTO processed_files (file_path, file_hash, last_modified)
+                VALUES (%s, %s, %s)
+            """, (file_path, file_hash, datetime.fromtimestamp(os.path.getmtime(file_path))))
+
+            conn.commit()
+            return str(file_path), True
         except Exception as e:
-            logging.error(f"加载文件 {file_path} 时发生错误: {str(e)}")
+            logging.error(f"处理文件时发生错误 {file_path}: {str(e)}")
             return None
+        finally:
+            if 'conn' in locals() and conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def load_data(self, directory: str = '../xlsx', force_reload: bool = False) -> None:
         """Load all Excel files from the directory into memory"""
@@ -152,51 +268,46 @@ class BookSearcher:
             return []
 
     def search_books(self, directory: str = '../xlsx', reload: bool = False, **kwargs) -> List[Dict[str, Any]]:
-        """搜索符合条件的书籍"""
-        if not self.loaded_data or reload:
-            self.load_data(directory, force_reload=reload)
-            
-        all_results = []
-        
-        # Create a pool of workers
-        with ProcessPoolExecutor(max_workers=self.n_workers) as executor:
-            futures = []
-            
-            # Process each loaded DataFrame
-            for file_path, df in self.loaded_data.items():
-                try:
-                    # Split DataFrame into chunks
-                    chunks = [df[i:i + self.chunk_size] for i in range(0, len(df), self.chunk_size)]
-                    
-                    # Submit each chunk for processing
-                    for chunk in chunks:
-                        futures.append(
-                            executor.submit(self.process_chunk, (chunk, kwargs))
-                        )
-                    
-                except Exception as e:
-                    logging.error(f"处理文件 {file_path} 时发生错误: {str(e)}")
-                    logging.error(traceback.format_exc())
-            
-            # Show progress
-            total_futures = len(futures)
-            completed = 0
-            
-            # Collect results as they complete
-            for future in futures:
-                try:
-                    chunk_results = future.result()
-                    all_results.extend(chunk_results)
-                    completed += 1
-                    print(f"搜索进度: {completed}/{total_futures} 块 ({(completed/total_futures*100):.1f}%)", 
-                          end='\r')
-                except Exception as e:
-                    logging.error(f"处理搜索结果时发生错误: {str(e)}")
-            
-            print("\n搜索完成！")
-        
-        self.search_results = all_results
-        return all_results
+        """从数据库中搜索符合条件的书籍"""
+        try:
+            conn = mysql.connector.connect(**self.db_config)
+            cursor = conn.cursor(dictionary=True)
+
+            # 构建查询条件
+            conditions = []
+            params = []
+            for field, value in kwargs.items():
+                if value:
+                    if field == 'title':
+                        conditions.append("title LIKE %s")
+                        params.append(f"%{value}%")
+                    elif field == 'author':
+                        conditions.append("author LIKE %s")
+                        params.append(f"%{value}%")
+                    elif field == 'publisher':
+                        conditions.append("publisher LIKE %s")
+                        params.append(f"%{value}%")
+                    elif field == 'year':
+                        conditions.append("publish_year = %s")
+                        params.append(value)
+                    # 添加其他搜索条件...
+
+            query = "SELECT * FROM books"
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            self.search_results = results
+            return results
+
+        except Error as e:
+            logging.error(f"数据库搜索错误: {e}")
+            return []
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def print_results(self, verbose: bool = False) -> None:
         """打印搜索结果"""
