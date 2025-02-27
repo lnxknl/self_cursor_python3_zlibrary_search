@@ -62,18 +62,21 @@ document.addEventListener('DOMContentLoaded', function() {
         }).showToast();
     }
 
-    function displayResults(results, count) {
+    let currentPage = 1;
+    const perPage = 1000;
+
+    function displayResults(data, pagination) {
         resultsBody.innerHTML = '';
-        if (results.length === 0) {
-            resultsStats.textContent = window.translations.no_results;
+        if (data.length === 0) {
+            resultsStats.textContent = '未找到匹配的结果';
             resultsTable.style.display = 'none';
             return;
         }
 
-        resultsStats.textContent = window.translations.results_count.replace('{}', count);
+        resultsStats.textContent = `共找到 ${pagination.total} 条结果，当前显示第 ${pagination.page}/${pagination.total_pages} 页`;
         resultsTable.style.display = 'table';
         
-        results.forEach(book => {
+        data.forEach(book => {
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td>${book.file_id || ''}</td>
@@ -86,6 +89,74 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
             resultsBody.appendChild(row);
         });
+
+        // 更新分页控件
+        updatePagination(pagination);
+    }
+
+    function updatePagination(pagination) {
+        const paginationDiv = document.getElementById('pagination');
+        if (!paginationDiv) return;
+
+        paginationDiv.innerHTML = '';
+        if (pagination.total_pages > 1) {
+            // 添加上一页按钮
+            const prevButton = document.createElement('button');
+            prevButton.textContent = '上一页';
+            prevButton.disabled = pagination.page <= 1;
+            prevButton.onclick = () => performSearch(pagination.page - 1);
+            paginationDiv.appendChild(prevButton);
+
+            // 添加页码
+            const pageSpan = document.createElement('span');
+            pageSpan.textContent = ` 第 ${pagination.page} 页，共 ${pagination.total_pages} 页 `;
+            paginationDiv.appendChild(pageSpan);
+
+            // 添加下一页按钮
+            const nextButton = document.createElement('button');
+            nextButton.textContent = '下一页';
+            nextButton.disabled = pagination.page >= pagination.total_pages;
+            nextButton.onclick = () => performSearch(pagination.page + 1);
+            paginationDiv.appendChild(nextButton);
+        }
+    }
+
+    async function performSearch(page = 1) {
+        showLoading();
+        try {
+            const formData = new FormData(searchForm);
+            const searchParams = {
+                page: page,
+                per_page: perPage
+            };
+            
+            for (let [key, value] of formData.entries()) {
+                if (value.trim()) {
+                    searchParams[key] = value.trim();
+                }
+            }
+
+            const response = await fetch('/api/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(searchParams)
+            });
+
+            const data = await response.json();
+            if (data.status === 'success') {
+                displayResults(data.data, data.pagination);
+                currentPage = page;
+            } else {
+                showToast(data.message, true);
+            }
+        } catch (error) {
+            console.error('Search error:', error);
+            showToast(`Error: ${error.message}`, true);
+        } finally {
+            hideLoading();
+        }
     }
 
     // 加载数据按钮点击事件
@@ -130,41 +201,11 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // 搜索表单提交事件
+    // 更新表单提交事件处理
     if (searchForm) {
         searchForm.addEventListener('submit', async function(e) {
             e.preventDefault();
-            showLoading();
-
-            try {
-                const formData = new FormData(searchForm);
-                const searchParams = {};
-                for (let [key, value] of formData.entries()) {
-                    if (value.trim()) {
-                        searchParams[key] = value.trim();
-                    }
-                }
-
-                const response = await fetch('/api/search', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(searchParams)
-                });
-
-                const data = await response.json();
-                if (data.status === 'success') {
-                    displayResults(data.data, data.count);
-                } else {
-                    showToast(data.message, true);
-                }
-            } catch (error) {
-                console.error('Search error:', error);
-                showToast(`Error: ${error.message}`, true);
-            } finally {
-                hideLoading();
-            }
+            performSearch(1);  // 搜索时重置到第一页
         });
     }
 

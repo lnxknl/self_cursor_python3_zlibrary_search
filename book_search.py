@@ -338,8 +338,8 @@ class BookSearcher:
             logging.error(f"处理数据块时发生错误: {str(e)}")
             return []
 
-    def search_books(self, **kwargs) -> List[Dict[str, Any]]:
-        """从数据库中搜索符合条件的书籍"""
+    def search_books(self, page=1, per_page=1000, **kwargs) -> dict:
+        """从数据库中搜索符合条件的书籍，支持分页"""
         try:
             conn = mysql.connector.connect(**self.db_config)
             cursor = conn.cursor(dictionary=True)
@@ -365,29 +365,48 @@ class BookSearcher:
                 params.append(kwargs['language'])
             if kwargs.get('year'):
                 conditions.append("publish_year = %s")
-                params.append(int(kwargs['year']))
+                params.append(kwargs['year'])
             if kwargs.get('format'):
                 conditions.append("format = %s")
                 params.append(kwargs['format'])
 
-            # 构建SQL查询
-            query = "SELECT * FROM books"
-            if conditions:
-                query += " WHERE " + " AND ".join(conditions)
-            query += " LIMIT 1000"  # 限制返回结果数量
+            # 构建WHERE子句
+            where_clause = " AND ".join(conditions) if conditions else "1"
 
-            # 执行查询
-            cursor.execute(query, params)
+            # 获取总记录数
+            count_query = f"SELECT COUNT(*) as total FROM books WHERE {where_clause}"
+            cursor.execute(count_query, params)
+            total_count = cursor.fetchone()['total']
+
+            # 计算分页
+            offset = (page - 1) * per_page
+            
+            # 执行分页查询
+            query = f"""
+                SELECT * FROM books 
+                WHERE {where_clause}
+                ORDER BY id 
+                LIMIT %s OFFSET %s
+            """
+            cursor.execute(query, params + [per_page, offset])
             results = cursor.fetchall()
+
+            # 计算总页数
+            total_pages = (total_count + per_page - 1) // per_page
+
+            logging.info(f"数据库查询完成，共找到 {total_count} 条结果，当前显示第 {page} 页")
             
-            # 记录查询信息
-            logging.info(f"数据库查询完成，找到 {len(results)} 条结果")
-            
-            return results
+            return {
+                'results': results,
+                'total': total_count,
+                'page': page,
+                'per_page': per_page,
+                'total_pages': total_pages
+            }
 
         except Error as e:
-            logging.error(f"数据库搜索错误: {e}")
-            return []
+            logging.error(f"数据库查询错误: {e}")
+            return {'results': [], 'total': 0, 'page': page, 'per_page': per_page, 'total_pages': 0}
         finally:
             if conn.is_connected():
                 cursor.close()
@@ -519,10 +538,10 @@ def main():
         searcher.print_results(args.verbose)
         
         # 导出结果
-        if args.export and results:
+        if args.export and results['results']:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             export_file = f"search_results_{timestamp}.xlsx"
-            pd.DataFrame(results).to_excel(export_file, index=False)
+            pd.DataFrame(results['results']).to_excel(export_file, index=False)
             print(f"\n搜索结果已导出到: {export_file}")
         
         return 0
