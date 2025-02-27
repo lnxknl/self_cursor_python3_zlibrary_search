@@ -62,20 +62,16 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function displayResults(results, count) {
-        console.log('Displaying results:', results);
-        if (!resultsBody) return;
-        
         resultsBody.innerHTML = '';
-        if (resultsStats) {
-            const countMessage = window.translations[window.currentLang]['results_count'].replace('{}', count);
-            resultsStats.textContent = countMessage;
-        }
-
         if (results.length === 0) {
-            resultsStats.textContent = '未找到匹配的结果';
+            resultsStats.textContent = window.translations.no_results;
+            resultsTable.style.display = 'none';
             return;
         }
 
+        resultsStats.textContent = window.translations.results_count.replace('{}', count);
+        resultsTable.style.display = 'table';
+        
         results.forEach(book => {
             const row = document.createElement('tr');
             row.innerHTML = `
@@ -89,9 +85,6 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
             resultsBody.appendChild(row);
         });
-
-        // 显示表格
-        resultsTable.style.display = 'table';
     }
 
     // 加载数据按钮点击事件
