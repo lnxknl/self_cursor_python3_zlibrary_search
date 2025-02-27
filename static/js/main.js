@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('JavaScript initializing...'); // Debug log
     const searchForm = document.getElementById('searchForm');
     const loadDataBtn = document.getElementById('loadDataBtn');
+    const clearBtn = document.getElementById('clearBtn');
     const loading = document.getElementById('loading');
     const resultsStats = document.getElementById('resultsStats');
     const resultsBody = document.getElementById('resultsBody');
@@ -90,6 +91,16 @@ document.addEventListener('DOMContentLoaded', function() {
     // 加载数据按钮点击事件
     if (loadDataBtn) {
         loadDataBtn.addEventListener('click', loadData);
+    }
+
+    // 清除按钮点击事件
+    if (clearBtn) {
+        clearBtn.addEventListener('click', function() {
+            searchForm.reset();
+            resultsBody.innerHTML = '';
+            resultsStats.textContent = '';
+            resultsTable.style.display = 'none';
+        });
     }
 
     async function loadData() {
