@@ -69,11 +69,12 @@ class BookSearcher:
                     file_hash VARCHAR(64) NOT NULL,
                     last_modified TIMESTAMP,
                     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE KEY unique_file (file_path)
+                    UNIQUE KEY unique_file_hash (file_hash),
+                    UNIQUE KEY unique_file_path (file_path)
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             """)
             
-            # 创建书籍信息表，使用MEDIUMTEXT类型存储可能较长的内容
+            # 创建书籍信息表
             cursor.execute("""
                 CREATE TABLE books (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -119,13 +120,25 @@ class BookSearcher:
 
             # 检查文件是否已处理
             cursor.execute("""
-                SELECT * FROM processed_files 
-                WHERE file_path = %s AND file_hash = %s
+                SELECT file_path, file_hash, last_modified 
+                FROM processed_files 
+                WHERE file_path = %s OR file_hash = %s
             """, (file_path, file_hash))
             
-            if cursor.fetchone():
-                logging.info(f"文件已处理过，跳过: {file_path}")
-                return None
+            result = cursor.fetchone()
+            if result:
+                db_path, db_hash, db_modified = result
+                current_modified = datetime.fromtimestamp(os.path.getmtime(file_path))
+                
+                # 如果文件路径和哈希值都匹配，且修改时间未变，则跳过
+                if db_path == file_path and db_hash == file_hash:
+                    logging.info(f"文件已处理过且未修改，跳过: {file_path}")
+                    return None
+                
+                # 如果只有哈希值匹配，说明是相同内容的文件
+                if db_hash == file_hash:
+                    logging.info(f"发现相同内容的文件: {db_path} 和 {file_path}")
+                    return None
 
             # 优化Excel读取
             df = pd.read_excel(
