@@ -24,7 +24,7 @@ class ExcelLoader:
             'password': '123',  # 替换为你的数据库密码
             'database': 'book_search'
         }
-        self.chunk_size = 5000
+        self.chunk_size = 100000
         self.n_workers = min(42, mp.cpu_count())
 
     def init_database(self):
