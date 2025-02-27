@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const resultsStats = document.getElementById('resultsStats');
     const resultsBody = document.getElementById('resultsBody');
     const languageSelect = document.getElementById('languageSelect');
+    const resultsTable = document.getElementById('resultsTable');
 
     // Initialize translations
     if (!window.translations) {
@@ -60,37 +61,38 @@ document.addEventListener('DOMContentLoaded', function() {
         }).showToast();
     }
 
-    function displayResults(data) {
-        console.log('Displaying results:', data);
+    function displayResults(results, count) {
+        console.log('Displaying results:', results);
         if (!resultsBody) return;
         
         resultsBody.innerHTML = '';
         if (resultsStats) {
-            const countMessage = window.translations[window.currentLang]['results_count'].replace('{}', data.count);
+            const countMessage = window.translations[window.currentLang]['results_count'].replace('{}', count);
             resultsStats.textContent = countMessage;
         }
 
-        if (data.results && Array.isArray(data.results)) {
-            data.results.forEach(book => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${book.file_id || ''}</td>
-                    <td>${book.title || ''}</td>
-                    <td>${book.author || ''}</td>
-                    <td>${book.publisher || ''}</td>
-                    <td>${book.language || ''}</td>
-                    <td>${book.year || ''}</td>
-                    <td>${book.format || ''}</td>
-                `;
-                resultsBody.appendChild(row);
-            });
+        if (results.length === 0) {
+            resultsStats.textContent = '未找到匹配的结果';
+            return;
         }
-    }
 
-    // 页面加载时自动加载数据
-    window.addEventListener('load', async function() {
-        await loadData();
-    });
+        results.forEach(book => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${book.file_id || ''}</td>
+                <td>${book.title || ''}</td>
+                <td>${book.author || ''}</td>
+                <td>${book.publisher || ''}</td>
+                <td>${book.language || ''}</td>
+                <td>${book.publish_year || ''}</td>
+                <td>${book.format || ''}</td>
+            `;
+            resultsBody.appendChild(row);
+        });
+
+        // 显示表格
+        resultsTable.style.display = 'table';
+    }
 
     // 加载数据按钮点击事件
     if (loadDataBtn) {
@@ -106,8 +108,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    directory: '../xlsx',
-                    force_reload: true
+                    force_reload: false  // 默认不强制重新加载
                 })
             });
 
@@ -131,13 +132,15 @@ document.addEventListener('DOMContentLoaded', function() {
             e.preventDefault();
             showLoading();
 
-            const formData = new FormData(searchForm);
-            const searchParams = {};
-            for (let [key, value] of formData.entries()) {
-                if (value) searchParams[key] = value;
-            }
-
             try {
+                const formData = new FormData(searchForm);
+                const searchParams = {};
+                for (let [key, value] of formData.entries()) {
+                    if (value.trim()) {
+                        searchParams[key] = value.trim();
+                    }
+                }
+
                 const response = await fetch('/api/search', {
                     method: 'POST',
                     headers: {
@@ -148,8 +151,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 const data = await response.json();
                 if (data.status === 'success') {
-                    displayResults(data.data);
-                    showToast(`找到 ${data.count} 条结果`);
+                    displayResults(data.data, data.count);
                 } else {
                     showToast(data.message, true);
                 }

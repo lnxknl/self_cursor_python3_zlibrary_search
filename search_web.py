@@ -53,40 +53,26 @@ def load_data():
     """Load or reload the book data"""
     try:
         data = request.get_json()
-        # 使用相对于应用程序的路径
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        directory = data.get('directory', '../xlsx')
-        directory = os.path.join(base_dir, directory)
         force_reload = data.get('force_reload', False)
         
-        # 确保目录存在
-        directory = os.path.abspath(directory)
-        logging.info(f"Searching for Excel files in directory: {directory}")
-        
-        if not os.path.exists(directory):
-            return jsonify({
-                'status': 'error',
-                'message': f'目录不存在: {directory}'
-            }), 404
+        if not force_reload:
+            # 检查数据库中是否已有数据
+            searcher = get_user_searcher()
+            stats = searcher.get_statistics()
+            if stats.get('total', 0) > 0:
+                return jsonify({
+                    'status': 'success',
+                    'message': f'数据库中已有 {stats["total"]} 条记录，无需重新加载'
+                })
 
-        # 检查是否有Excel文件
-        excel_files = []
-        for pattern in ['*.xlsx', '*.xls']:
-            excel_files.extend(Path(directory).glob(pattern))
-        
-        if not excel_files:
-            return jsonify({
-                'status': 'error',
-                'message': f'在目录 {directory} 中未找到Excel文件'
-            }), 404
-
-        logging.info(f"Found {len(excel_files)} Excel files")
+        # 只有在强制重新加载或数据库为空时才处理Excel文件
+        directory = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'xlsx')
         searcher = get_user_searcher()
         searcher.load_data(directory=directory, force_reload=force_reload)
         
         return jsonify({
             'status': 'success',
-            'message': f'成功处理 {len(excel_files)} 个Excel文件'
+            'message': '数据加载完成'
         })
     except Exception as e:
         logging.error(f"Error loading data: {str(e)}")
