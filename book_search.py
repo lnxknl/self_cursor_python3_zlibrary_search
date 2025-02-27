@@ -39,17 +39,38 @@ class BookSearcher:
     """图书搜索器"""
     
     def __init__(self):
-        self.search_results = []
-        self.chunk_size = 200000
-        self.n_workers = min(42, mp.cpu_count())
-        self.data_lock = Lock()
         self.db_config = {
             'host': 'localhost',
             'user': 'root',
             'password': '123',
             'database': 'book_search'
         }
-        self.init_database()
+        self.ensure_db_initialized()
+
+    def ensure_db_initialized(self):
+        """确保数据库已初始化"""
+        try:
+            conn = mysql.connector.connect(**self.db_config)
+            cursor = conn.cursor()
+            
+            # 检查表是否存在
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_schema = %s 
+                AND table_name IN ('books', 'processed_files')
+            """, (self.db_config['database'],))
+            
+            if cursor.fetchone()[0] < 2:
+                self.init_database()
+            
+        except Error as e:
+            logging.error(f"检查数据库状态时发生错误: {e}")
+            raise
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def init_database(self):
         """初始化数据库连接和表"""
@@ -227,8 +248,22 @@ class BookSearcher:
                 conn.close()
 
     def load_data(self, directory: str = '../xlsx', force_reload: bool = False) -> None:
-        """加载所有Excel文件到数据库中"""
+        """仅在必要时加载Excel文件数据"""
         try:
+            # 首先检查数据库中是否已有数据
+            conn = mysql.connector.connect(**self.db_config)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM books")
+            book_count = cursor.fetchone()[0]
+            
+            if book_count > 0 and not force_reload:
+                logging.info(f"数据库中已有 {book_count} 条记录，跳过加载")
+                return
+            
+            # 如果没有数据或强制重新加载，则处理Excel文件
+            logging.info("开始加载Excel文件数据...")
+            
             excel_files = []
             for pattern in ['*.xlsx', '*.xls']:
                 excel_files.extend(Path(directory).glob(pattern))
@@ -238,12 +273,8 @@ class BookSearcher:
             
             print(f"找到 {len(excel_files)} 个Excel文件，开始加载...")
             
-            if force_reload:
-                # 如果强制重新加载，重新初始化数据库表
-                self.init_database()
-
             # 使用进程池处理文件
-            with ProcessPoolExecutor(max_workers=self.n_workers) as executor:
+            with ProcessPoolExecutor(max_workers=min(42, mp.cpu_count())) as executor:
                 futures = []
                 for file_path in excel_files:
                     futures.append(
@@ -270,9 +301,13 @@ class BookSearcher:
                         logging.error(traceback.format_exc())
         
             print("\n数据加载完成！")
-        except Exception as e:
-            logging.error(f"加载数据时发生错误: {str(e)}")
+        except Error as e:
+            logging.error(f"检查数据库状态时发生错误: {e}")
             raise
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     @staticmethod
     def process_chunk(args):
@@ -312,28 +347,42 @@ class BookSearcher:
             # 构建查询条件
             conditions = []
             params = []
-            for field, value in kwargs.items():
-                if value:
-                    if field == 'title':
-                        conditions.append("MATCH(title) AGAINST(%s)")
-                        params.append(f"%{value}%")
-                    elif field == 'author':
-                        conditions.append("MATCH(author) AGAINST(%s)")
-                        params.append(f"%{value}%")
-                    elif field == 'publisher':
-                        conditions.append("MATCH(publisher) AGAINST(%s)")
-                        params.append(f"%{value}%")
-                    elif field == 'year':
-                        conditions.append("publish_year = %s")
-                        params.append(value)
-                    # 添加其他搜索条件...
+            
+            if kwargs.get('file_id'):
+                conditions.append("file_id = %s")
+                params.append(kwargs['file_id'])
+            if kwargs.get('title'):
+                conditions.append("MATCH(title) AGAINST(%s IN BOOLEAN MODE)")
+                params.append(f"*{kwargs['title']}*")
+            if kwargs.get('author'):
+                conditions.append("MATCH(author) AGAINST(%s IN BOOLEAN MODE)")
+                params.append(f"*{kwargs['author']}*")
+            if kwargs.get('publisher'):
+                conditions.append("MATCH(publisher) AGAINST(%s IN BOOLEAN MODE)")
+                params.append(f"*{kwargs['publisher']}*")
+            if kwargs.get('language'):
+                conditions.append("language = %s")
+                params.append(kwargs['language'])
+            if kwargs.get('year'):
+                conditions.append("publish_year = %s")
+                params.append(int(kwargs['year']))
+            if kwargs.get('format'):
+                conditions.append("format = %s")
+                params.append(kwargs['format'])
 
+            # 构建SQL查询
             query = "SELECT * FROM books"
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
+            query += " LIMIT 1000"  # 限制返回结果数量
 
+            # 执行查询
             cursor.execute(query, params)
             results = cursor.fetchall()
+            
+            # 记录查询信息
+            logging.info(f"数据库查询完成，找到 {len(results)} 条结果")
+            
             return results
 
         except Error as e:
@@ -375,6 +424,47 @@ class BookSearcher:
                     for field in main_fields:
                         if field in book:
                             print(f"  {field}: {book[field]}")
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """获取数据库统计信息"""
+        try:
+            conn = mysql.connector.connect(**self.db_config)
+            cursor = conn.cursor(dictionary=True)
+            
+            stats = {}
+            
+            # 获取总记录数
+            cursor.execute("SELECT COUNT(*) as total FROM books")
+            stats.update(cursor.fetchone())
+            
+            # 获取语言统计
+            cursor.execute("""
+                SELECT language, COUNT(*) as count 
+                FROM books 
+                WHERE language IS NOT NULL 
+                GROUP BY language
+            """)
+            stats['languages'] = cursor.fetchall()
+            
+            # 获取年份范围
+            cursor.execute("""
+                SELECT 
+                    MIN(publish_year) as earliest_year,
+                    MAX(publish_year) as latest_year
+                FROM books 
+                WHERE publish_year IS NOT NULL
+            """)
+            stats.update(cursor.fetchone())
+            
+            return stats
+            
+        except Error as e:
+            logging.error(f"获取统计信息时发生错误: {e}")
+            return {}
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
 def main():
     """主函数"""
