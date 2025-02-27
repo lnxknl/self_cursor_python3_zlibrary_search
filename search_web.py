@@ -95,10 +95,6 @@ def search():
         
         searcher = get_user_searcher()
         
-        # 获取分页参数
-        page = int(data.get('page', 1))
-        per_page = int(data.get('per_page', 1000))
-        
         # 构建搜索参数
         search_params = {
             'title': data.get('title'),
@@ -106,9 +102,7 @@ def search():
             'publisher': data.get('publisher'),
             'year': data.get('year'),
             'language': data.get('language'),
-            'format': data.get('format'),
-            'page': page,
-            'per_page': per_page
+            'format': data.get('format')
         }
         
         # 移除None值
@@ -119,13 +113,8 @@ def search():
         
         return jsonify({
             'status': 'success',
-            'data': results['results'],
-            'pagination': {
-                'total': results['total'],
-                'page': results['page'],
-                'per_page': results['per_page'],
-                'total_pages': results['total_pages']
-            }
+            'data': results,
+            'count': len(results)
         })
     except Exception as e:
         logging.error(f"Search error: {str(e)}")
