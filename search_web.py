@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, request, session
+from flask import Flask, render_template, jsonify, request, session, json
 from book_search import BookSearcher
 from translations import TRANSLATIONS
 import os
@@ -33,8 +33,13 @@ def index():
     # Get language from query parameter or session or default to Chinese
     lang = request.args.get('lang') or session.get('lang', 'zh')
     session['lang'] = lang  # Store language preference in session
+    
+    # 将翻译字典转换为JSON安全的格式
+    translations_json = json.dumps(TRANSLATIONS[lang], ensure_ascii=False)
+    
     return render_template('index.html', 
                          translations=TRANSLATIONS[lang],
+                         translations_json=translations_json,
                          current_lang=lang)
 
 @app.route('/change-language/<lang>')
