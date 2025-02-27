@@ -20,6 +20,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import mysql.connector
 from mysql.connector import Error
 import hashlib
+import time
 
 # 设置警告过滤
 warnings.filterwarnings('ignore')
@@ -126,54 +127,72 @@ class BookSearcher:
                 logging.info(f"文件已处理过，跳过: {file_path}")
                 return None
 
-            # 读取Excel文件
-            df = pd.read_excel(file_path)
+            # 优化Excel读取
+            df = pd.read_excel(
+                file_path,
+                dtype={
+                    '文件编号': str,
+                    '书名': str,
+                    '作者': str,
+                    '出版社': str,
+                    '语种': str,
+                    '出版年份': 'Int64',
+                    '文件格式': str
+                }
+            )
             df['源文件'] = Path(file_path).name
             
             # 替换所有的NaN值为None
             df = df.replace({np.nan: None})
 
-            # 分批处理数据
-            batch_size = 1000  # 每批处理1000条记录
+            # 分批处理数据，增加批量大小
+            batch_size = 5000  # 增加到5000条记录
             total_rows = len(df)
             processed_rows = 0
+            last_log_time = time.time()
+            log_interval = 5  # 每5秒记录一次日志
+
+            # 准备SQL语句
+            sql = """
+                INSERT INTO books (
+                    file_id, title, author, publisher, 
+                    language, publish_year, format, source_file
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
 
             while processed_rows < total_rows:
                 batch_df = df.iloc[processed_rows:processed_rows + batch_size]
                 values = []
                 
                 for _, row in batch_df.iterrows():
-                    # 处理每个字段，确保None值和长字符串被正确处理
-                    file_id = str(row.get('文件编号'))[:100] if pd.notna(row.get('文件编号')) else None
-                    title = str(row.get('书名')) if pd.notna(row.get('书名')) else None
-                    author = str(row.get('作者')) if pd.notna(row.get('作者')) else None
-                    publisher = str(row.get('出版社')) if pd.notna(row.get('出版社')) else None
-                    language = str(row.get('语种'))[:50] if pd.notna(row.get('语种')) else None
-                    publish_year = int(row.get('出版年份')) if pd.notna(row.get('出版年份')) else None
-                    file_format = str(row.get('文件格式'))[:50] if pd.notna(row.get('文件格式')) else None
-                    source_file = str(row.get('源文件'))[:512] if pd.notna(row.get('源文件')) else None
-                    
                     values.append((
-                        file_id, title, author, publisher,
-                        language, publish_year, file_format, source_file
+                        str(row.get('文件编号'))[:100] if pd.notna(row.get('文件编号')) else None,
+                        str(row.get('书名')) if pd.notna(row.get('书名')) else None,
+                        str(row.get('作者')) if pd.notna(row.get('作者')) else None,
+                        str(row.get('出版社')) if pd.notna(row.get('出版社')) else None,
+                        str(row.get('语种'))[:50] if pd.notna(row.get('语种')) else None,
+                        int(row.get('出版年份')) if pd.notna(row.get('出版年份')) else None,
+                        str(row.get('文件格式'))[:50] if pd.notna(row.get('文件格式')) else None,
+                        str(row.get('源文件'))[:512] if pd.notna(row.get('源文件')) else None
                     ))
 
                 try:
-                    # 批量插入数据
-                    cursor.executemany("""
-                        INSERT INTO books (
-                            file_id, title, author, publisher, 
-                            language, publish_year, format, source_file
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """, values)
+                    # 使用executemany进行批量插入
+                    cursor.executemany(sql, values)
                     conn.commit()
+                    
+                    processed_rows += len(batch_df)
+                    
+                    # 控制日志输出频率
+                    current_time = time.time()
+                    if current_time - last_log_time >= log_interval:
+                        logging.info(f"文件 {Path(file_path).name}: 已处理 {processed_rows}/{total_rows} 行 ({processed_rows/total_rows*100:.1f}%)")
+                        last_log_time = current_time
+                        
                 except Error as e:
                     logging.error(f"插入批次数据时发生错误: {str(e)}")
                     conn.rollback()
                     raise
-
-                processed_rows += batch_size
-                logging.info(f"已处理 {processed_rows}/{total_rows} 行 ({processed_rows/total_rows*100:.1f}%)")
 
             # 记录已处理文件
             cursor.execute("""
@@ -182,6 +201,7 @@ class BookSearcher:
             """, (file_path, file_hash, datetime.fromtimestamp(os.path.getmtime(file_path))))
 
             conn.commit()
+            logging.info(f"完成处理文件 {Path(file_path).name}: 共处理 {total_rows} 行")
             return str(file_path), True
         except Exception as e:
             logging.error(f"处理文件时发生错误 {file_path}: {str(e)}")
